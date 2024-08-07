@@ -12,17 +12,23 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.coobird.thumbnailator.Thumbnailator;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
+import java.io.*;
 import java.net.URLEncoder;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
+import java.util.Optional;
 
 import static com.th.image_resizer.exception.CommonErrorCode.*;
 
@@ -36,6 +42,7 @@ public class PicService {
     private String downloadPath;
     private String savePath = "C:/download/";
 
+    @Transactional
     public ApiResponse<ResVo> postPic(List<MultipartFile> pics, PicsDto dto) {
 //        for (MultipartFile pic : pics) {
 //            log.info("{}", pic.getContentType());
@@ -45,13 +52,15 @@ public class PicService {
 //        }
 //        log.info("2 -----------------");
 
-
+        Pic resultPic = null;
         for (MultipartFile pic : pics) {
             Pic tmpPic = new Pic();
             tmpPic.setDoneFl(0);
-            picRepository.save(tmpPic);
+            resultPic = picRepository.save(tmpPic);
             String target = "/pic/" + tmpPic.getIpic();
             String saveFileNm = fileUtils.transferTo(pic, target);
+            resultPic.setPic("s_" + saveFileNm);
+//            picRepository.save(resultPic);
 
             //썸네일 파일 경로 설정
             String savedFilePath = downloadPath + target + "/" + saveFileNm;
@@ -69,17 +78,19 @@ public class PicService {
                     BufferedImage bo_image = ImageIO.read(savedFile);
                     double ratio = 2;
                     int width = (int) (bo_image.getWidth() / ratio);
-                    int height =(int) (bo_image.getHeight() / ratio);
+                    int height = (int) (bo_image.getHeight() / ratio);
                     Thumbnailator.createThumbnail(savedFile, new File(saveThumbnailPath), width, height);
                 }
+                File file = new File(savedFilePath);
+                file.delete();
             } catch (Exception e) {
                 throw new RestApiException(INTERNAL_SERVER_ERROR);
             }
         }
-        return new ApiResponse<>("200", "작업이 완료되었습니다.");
+        return new ApiResponse<>("200", "작업이 완료되었습니다.", new ResVo((resultPic.getIpic().intValue())));
     }
 
-    public void download(PicsDownloadDto dto, HttpServletResponse response) {
+    public void downloadImage(PicsDownloadDto dto, HttpServletResponse response) {
         String target = "/pic/" + dto.getIpic();
         String savedFileNm = picRepository.getReferenceById(dto.getIpic()).getPic();
         String savedFilePath = downloadPath + target + "/" + savedFileNm;
@@ -149,6 +160,37 @@ public class PicService {
             }
         } catch (Exception e) {
             throw new RestApiException(INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    public ResponseEntity<Resource> downloadImage(long ipic) {
+        String target = "/pic/" + ipic;
+        Optional<Pic> optPic = picRepository.findById(ipic);
+        Pic pic = optPic.get();
+        log.info(pic.getPic());
+        String absFilePath = downloadPath + target + "/" + pic.getPic();
+        try {
+            log.info(absFilePath);
+//            Path filePath = Paths.get(downloadPath+"pic/"+ipic).resolve(pic.getPic()).normalize();
+            Path filePath = Paths.get(absFilePath).toAbsolutePath().normalize();
+            Resource resource = new FileSystemResource(filePath);
+
+            if (resource.exists() && resource.isFile()) {
+                return ResponseEntity.ok()
+                        .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + resource.getFilename() + "\"")
+                        .body(resource);
+            }
+
+//            String contentType = Files.probeContentType(filePath);
+//            if (contentType == null) {
+//                contentType = "application/octet-stream";
+//            }
+            throw new RestApiException(INTERNAL_SERVER_ERROR);
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
+        } finally {
+//            fileUtils.delFolder(downloadPath + target);
+//            picRepository.delete(pic);
         }
     }
 }
